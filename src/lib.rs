@@ -1,3 +1,18 @@
+pub type ParseResult<'a, Output> = Result<(&'a str, Output), &'a str>;
+
+pub trait Parser<'a, Output> {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Output>;
+}
+
+impl<'a, F, Output> Parser<'a, Output> for F
+where
+    F: Fn(&'a str) -> ParseResult<Output>,
+{
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Output> {
+        self(input)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Element {
     name: String,
@@ -5,7 +20,7 @@ struct Element {
     children: Vec<Element>,
 }
 
-pub fn literal(expected: &'static str) -> impl Fn(&str) -> Result<(&str, ()), &str> {
+pub fn literal(expected: &'static str) -> impl Fn(&str) -> ParseResult<()> {
     move |input| match input.get(0..expected.len()) {
         Some(next) if next == expected => Ok((&input[expected.len()..], ())),
         _ => Err(input),
@@ -15,7 +30,7 @@ pub fn literal(expected: &'static str) -> impl Fn(&str) -> Result<(&str, ()), &s
 // Here are the rules for an identifier:
 //  -> first character must be an alphabet
 //  -> this can be followed by zero or more alphabets, numbers or the literal '-'
-pub fn identifier(input: &str) -> Result<(&str, String), &str> {
+pub fn identifier(input: &str) -> ParseResult<String> {
     let mut chars = input.chars();
     let mut end;
 
@@ -26,43 +41,41 @@ pub fn identifier(input: &str) -> Result<(&str, String), &str> {
     }
 
     // keep going till we have alphanumerics or the literal '-'
-    while let Some(next) = chars.next() {
+    for next in chars {
         if next.is_alphanumeric() || next == '-' {
-            end = end + 1;
+            end += 1;
         } else {
             break;
         }
     }
-    end = end + 1;
+    end += 1;
 
     Ok((&input[end..], String::from(&input[..end])))
 }
 
-pub fn pair<P1, P2, R1, R2>(
-    parser1: P1,
-    parser2: P2,
-) -> impl Fn(&str) -> Result<(&str, (R1, R2)), &str>
+pub fn pair<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, (R1, R2)>
 where
-    P1: Fn(&str) -> Result<(&str, R1), &str>,
-    P2: Fn(&str) -> Result<(&str, R2), &str>,
+    P1: Parser<'a, R1>,
+    P2: Parser<'a, R2>,
 {
-    move |input| match parser1(input) {
-        Ok((input, result1)) => match parser2(input) {
-            Ok((input, result2)) => Ok((input, (result1, result2))),
-            Err(input) => Err(input),
-        },
-        Err(input) => Err(input),
+    move |input| {
+        parser1.parse(input).and_then(|(input, result1)| {
+            parser2
+                .parse(input)
+                .map(|(input, result2)| (input, (result1, result2)))
+        })
     }
 }
 
-pub fn map<P, F, T, U>(parser: P, predicate: F) -> impl Fn(&str) -> Result<(&str, U), &str>
+pub fn map<'a, P, F, T, U>(parser: P, predicate: F) -> impl Parser<'a, U>
 where
-    P: Fn(&str) -> Result<(&str, T), &str>,
+    P: Parser<'a, T>,
     F: Fn(T) -> U,
 {
-    move |input| match parser(input) {
-        Ok((input, val)) => Ok((input, predicate(val))),
-        Err(input) => Err(input),
+    move |input| {
+        parser
+            .parse(input)
+            .map(|(input, val)| (input, predicate(val)))
     }
 }
 
@@ -71,16 +84,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn maps() {
+        let parser = map(literal("a"), |_| "ooh, nice");
+        assert_eq!(Ok(("", "ooh, nice")), parser.parse("a"));
+
+        let parser = map(literal("b"), |_| 10i32);
+        assert_eq!(Ok(("", 10)), parser.parse("b"));
+        assert_eq!(Err("a"), parser.parse("a"));
+    }
+
+    #[test]
     fn pairs() {
         let parser1 = pair(literal("<"), literal(">"));
-        assert_eq!(Ok(("", ((), ()))), parser1("<>"));
+        assert_eq!(Ok(("", ((), ()))), parser1.parse("<>"));
 
         let parser2 = pair(literal("<"), identifier);
         assert_eq!(
             Ok((" />", ((), "the-tag".to_string()))),
-            parser2("<the-tag />")
+            parser2.parse("<the-tag />")
         );
-        assert_eq!(Err("boo"), parser2("boo"));
+        assert_eq!(Err("boo"), parser2.parse("boo"));
     }
 
     #[test]
