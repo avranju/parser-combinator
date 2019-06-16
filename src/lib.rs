@@ -79,9 +79,40 @@ where
     }
 }
 
+pub fn left<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, R1>
+where
+    P1: Parser<'a, R1>,
+    P2: Parser<'a, R2>,
+{
+    map(pair(parser1, parser2), |(result, _)| result)
+}
+
+pub fn right<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, R2>
+where
+    P1: Parser<'a, R1>,
+    P2: Parser<'a, R2>,
+{
+    map(pair(parser1, parser2), |(_, result)| result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lefts() {
+        let parser = left(literal("prefix"), literal(".suffix"));
+        assert_eq!(Ok(("", ())), parser.parse("prefix.suffix"));
+
+        let parser = left(identifier, literal(".suffix"));
+        assert_eq!(Ok(("", "boo".to_owned())), parser.parse("boo.suffix"));
+    }
+
+    #[test]
+    fn rights() {
+        let parser = right(literal("<"), identifier);
+        assert_eq!(Ok(("/>", "the-tag".to_owned())), parser.parse("<the-tag/>"));
+    }
 
     #[test]
     fn maps() {
