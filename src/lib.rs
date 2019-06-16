@@ -20,8 +20,8 @@ struct Element {
     children: Vec<Element>,
 }
 
-pub fn literal(expected: &'static str) -> impl Fn(&str) -> ParseResult<()> {
-    move |input| match input.get(0..expected.len()) {
+pub fn literal<'a>(expected: &'static str) -> impl Parser<'a, ()> {
+    move |input: &'a str| match input.get(0..expected.len()) {
         Some(next) if next == expected => Ok((&input[expected.len()..], ())),
         _ => Err(input),
     }
@@ -50,7 +50,9 @@ pub fn identifier(input: &str) -> ParseResult<String> {
     }
     end += 1;
 
-    Ok((&input[end..], String::from(&input[..end])))
+    let r = Ok((&input[end..], String::from(&input[..end])));
+    dbg!(&r);
+    r
 }
 
 pub fn pair<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, (R1, R2)>
@@ -95,9 +97,118 @@ where
     map(pair(parser1, parser2), |(_, result)| result)
 }
 
+pub fn zero_or_more<'a, P, R>(parser: P) -> impl Parser<'a, Vec<R>>
+where
+    P: Parser<'a, R>,
+{
+    move |input| {
+        let mut tokens = vec![];
+        let mut remaining = input;
+        while let Ok((input, result)) = parser.parse(remaining) {
+            tokens.push(result);
+            remaining = input;
+        }
+
+        Ok((remaining, tokens))
+    }
+}
+
+pub fn one_or_more<'a, P, R>(parser: P) -> impl Parser<'a, Vec<R>>
+where
+    P: Parser<'a, R>,
+{
+    let parser = zero_or_more(parser);
+    move |input| {
+        let (input, tokens) = parser.parse(input)?;
+        if tokens.is_empty() {
+            Err(input)
+        } else {
+            Ok((input, tokens))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_or_mores() {
+        let parser = one_or_more(literal("<"));
+        assert_eq!(Err("nothing to parse"), parser.parse("nothing to parse"));
+        assert_eq!(Ok(("boo", vec![()])), parser.parse("<boo"));
+        assert_eq!(Ok(("boo", vec![(); 4])), parser.parse("<<<<boo"));
+
+        let parser = one_or_more(left(identifier, zero_or_more(literal(" "))));
+        assert_eq!(Err("!no identifiers"), parser.parse("!no identifiers"));
+        assert_eq!(
+            Ok((
+                "",
+                vec![
+                    "the".to_owned(),
+                    "three".to_owned(),
+                    "identifiers".to_owned()
+                ]
+            )),
+            parser.parse("the      three   identifiers")
+        );
+        assert_eq!(
+            Ok((
+                "",
+                vec![
+                    "the".to_owned(),
+                    "three".to_owned(),
+                    "identifiers".to_owned()
+                ]
+            )),
+            parser.parse("the      three   identifiers     ")
+        );
+    }
+
+    #[test]
+    fn zero_or_mores() {
+        let parser = zero_or_more(literal("<"));
+        assert_eq!(
+            Ok(("nothing to parse", vec![])),
+            parser.parse("nothing to parse")
+        );
+        assert_eq!(Ok(("boo", vec![()])), parser.parse("<boo"));
+        assert_eq!(Ok(("boo", vec![(); 4])), parser.parse("<<<<boo"));
+
+        let parser = zero_or_more(left(identifier, zero_or_more(literal(" "))));
+        assert_eq!(
+            Ok(("!no identifiers", vec![])),
+            parser.parse("!no identifiers")
+        );
+        assert_eq!(
+            Ok((
+                "",
+                vec![
+                    "the".to_owned(),
+                    "three".to_owned(),
+                    "identifiers".to_owned()
+                ]
+            )),
+            parser.parse("the      three   identifiers")
+        );
+        assert_eq!(
+            Ok((
+                "",
+                vec![
+                    "the".to_owned(),
+                    "three".to_owned(),
+                    "identifiers".to_owned()
+                ]
+            )),
+            parser.parse("the      three   identifiers     ")
+        );
+    }
+
+    #[test]
+    fn rights() {
+        let parser = right(literal("<"), identifier);
+        assert_eq!(Ok(("/>", "the-tag".to_owned())), parser.parse("<the-tag/>"));
+    }
 
     #[test]
     fn lefts() {
@@ -106,12 +217,8 @@ mod tests {
 
         let parser = left(identifier, literal(".suffix"));
         assert_eq!(Ok(("", "boo".to_owned())), parser.parse("boo.suffix"));
-    }
-
-    #[test]
-    fn rights() {
-        let parser = right(literal("<"), identifier);
-        assert_eq!(Ok(("/>", "the-tag".to_owned())), parser.parse("<the-tag/>"));
+        assert_eq!(Err("!boo.suffix"), parser.parse("!boo.suffix"));
+        assert_eq!(Err(".notsuffix"), parser.parse("boo.notsuffix"));
     }
 
     #[test]
@@ -157,15 +264,21 @@ mod tests {
     #[test]
     fn literals() {
         let parser = literal("a");
-        assert_eq!(parser("a str"), Ok((" str", ())));
+        assert_eq!(parser.parse("a str"), Ok((" str", ())));
 
         let parser = literal("prefix");
-        assert_eq!(parser("prefix"), Ok(("", ())));
+        assert_eq!(parser.parse("prefix"), Ok(("", ())));
 
         let parser = literal("long prefix");
-        assert_eq!(parser("long prefix with stuff"), Ok((" with stuff", ())));
+        assert_eq!(
+            parser.parse("long prefix with stuff"),
+            Ok((" with stuff", ()))
+        );
 
         let parser = literal("begins");
-        assert_eq!(parser("doesn't really begin"), Err("doesn't really begin"));
+        assert_eq!(
+            parser.parse("doesn't really begin"),
+            Err("doesn't really begin")
+        );
     }
 }
