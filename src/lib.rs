@@ -128,9 +128,70 @@ where
     }
 }
 
+pub fn any_char(input: &str) -> ParseResult<char> {
+    match input.chars().next() {
+        Some(next) => Ok((&input[next.len_utf8()..], next)),
+        _ => Err(input),
+    }
+}
+
+pub fn pred<'a, P, R, F>(parser: P, predicate: F) -> impl Parser<'a, R>
+where
+    P: Parser<'a, R>,
+    F: Fn(&R) -> bool,
+{
+    move |input| {
+        if let Ok((input, result)) = parser.parse(input) {
+            if predicate(&result) {
+                return Ok((input, result));
+            }
+        }
+
+        Err(input)
+    }
+}
+
+pub fn whitespace<'a>() -> impl Parser<'a, char> {
+    pred(any_char, |c| c.is_whitespace())
+}
+
+pub fn space1<'a>() -> impl Parser<'a, Vec<char>> {
+    one_or_more(whitespace())
+}
+
+pub fn space0<'a>() -> impl Parser<'a, Vec<char>> {
+    zero_or_more(whitespace())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whitespaces() {
+        assert_eq!(Ok(("a", ' ')), whitespace().parse(" a"));
+
+        assert_eq!(Ok(("a", vec![' '])), space1().parse(" a"));
+        assert_eq!(Ok(("a", vec![' '; 6])), space1().parse("      a"));
+        assert_eq!(Err("a"), space1().parse("a"));
+
+        assert_eq!(Ok(("a", vec![' '])), space0().parse(" a"));
+        assert_eq!(Ok(("a", vec![' '; 6])), space0().parse("      a"));
+        assert_eq!(Ok(("a", vec![])), space0().parse("a"));
+    }
+
+    #[test]
+    fn preds() {
+        let parser = pred(any_char, |c| c.is_whitespace());
+        assert_eq!(Ok(("a", ' ')), parser.parse(" a"));
+        assert_eq!(Err("a"), parser.parse("a"));
+    }
+
+    #[test]
+    fn anys() {
+        assert_eq!(Ok(("bcdef", 'a')), any_char("abcdef"));
+        assert_eq!(Err(""), any_char(""));
+    }
 
     #[test]
     fn one_or_mores() {
